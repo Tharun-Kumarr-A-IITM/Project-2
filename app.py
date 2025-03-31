@@ -30,71 +30,41 @@ async def process_question(
     question: str = Form(...),
     file: UploadFile = File(None)
 ):
-    # Create a temporary directory for file processing
-    with tempfile.TemporaryDirectory() as temp_dir:
-        file_paths = []
-        file_contents = {}
-        
-        # Process uploaded file if present
-        if file and file.filename:
-            file_path = os.path.join(temp_dir, file.filename)
-            
-            # Save the uploaded file
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            file_paths.append(file_path)
-            
-            # Handle ZIP files
-            if file.filename.endswith('.zip'):
-                extract_dir = os.path.join(temp_dir, "extracted")
-                os.makedirs(extract_dir, exist_ok=True)
-                
-                with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    zip_ref.extractall(extract_dir)
-                
-                # Process extracted files
-                for root, _, files in os.walk(extract_dir):
-                    for extracted_file in files:
-                        extracted_path = os.path.join(root, extracted_file)
-                        file_paths.append(extracted_path)
-                        
-                        # Read CSV files
-                        if extracted_file.endswith('.csv'):
-                            try:
-                                df = pd.read_csv(extracted_path)
-                                # Limit the data to prevent timeout
-                                if len(df) > 100:
-                                    file_contents[extracted_file] = f"CSV with {len(df)} rows and {len(df.columns)} columns.\n"
-                                    file_contents[extracted_file] += f"Column names: {', '.join(df.columns.tolist())}\n"
-                                    file_contents[extracted_file] += f"First 5 rows:\n{df.head(5).to_string()}\n"
-                                    if "answer" in df.columns:
-                                        file_contents[extracted_file] += f"\nValues in 'answer' column: {df['answer'].tolist()}"
-                                else:
-                                    file_contents[extracted_file] = df.to_string()
-                            except Exception as e:
-                                # If pandas fails, try with csv module
-                                try:
-                                    with open(extracted_path, 'r') as f:
-                                        reader = csv.reader(f)
-                                        rows = list(reader)
-                                        if len(rows) > 0:
-                                            headers = rows[0]
-                                            answer_col_index = -1
-                                            if "answer" in headers:
-                                                answer_col_index = headers.index("answer")
-                                            
-                                            file_contents[extracted_file] = f"CSV with {len(rows)} rows.\n"
-                                            file_contents[extracted_file] += f"Headers: {', '.join(headers)}\n"
-                                            
-                                            if answer_col_index >= 0:
-                                                answer_values = [row[answer_col_index] for row in rows[1:] if len(row) > answer_col_index]
-                                                file_contents[extracted_file] += f"Values in 'answer' column: {answer_values}"
-                                except Exception as e:
-                                    file_contents[extracted_file] = f"Error reading file: {str(e)}"
-        
-        answer = await generate_answer(question, file_contents)
-        return {"answer": answer}
+    temp_dir = "/tmp"  # Use Vercel-compatible temp storage
+    file_paths = []
+    file_contents = {}
+
+    if file and file.filename:
+        file_path = os.path.join(temp_dir, file.filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        file_paths.append(file_path)
+
+        if file.filename.endswith('.zip'):
+            extract_dir = os.path.join(temp_dir, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+
+            for root, _, files in os.walk(extract_dir):
+                for extracted_file in files:
+                    extracted_path = os.path.join(root, extracted_file)
+                    file_paths.append(extracted_path)
+
+                    if extracted_file.endswith('.csv'):
+                        try:
+                            df = pd.read_csv(extracted_path)
+                            if "answer" in df.columns:
+                                file_contents[extracted_file] = df['answer'].tolist()
+                        except Exception as e:
+                            file_contents[extracted_file] = f"Error reading CSV: {str(e)}"
+
+    answer = await generate_answer(question, file_contents)
+    return {"answer": answer}
+
 
 async def generate_answer(question: str, file_contents: dict = None):
     # Prepare a concise prompt with file contents if available
